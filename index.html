@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f5ef"><title>月月排｜AI 排課工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="rail">
+      <a class="brand" href="#top"><span class="brand-mark">月</span><span>月月排<small>STUDIO SCHEDULER</small></span></a>
+      <div class="rail-label">本月流程</div>
+      <nav id="step-nav" aria-label="排課步驟"></nav>
+      <div class="rail-bottom"><div class="help-orb">?</div><span>需要幫忙嗎？<small>快速了解排課流程</small></span><span class="arrow">↗</span></div>
+    </aside>
+    <main id="top" class="main">
+      <header class="topbar"><div class="mobile-brand"><span class="brand-mark">月</span>月月排</div><div class="crumb">工作室 <span>/</span> 每月排課</div><div class="top-actions"><span class="mode-pill">原型預覽</span><span class="month-pill"><i></i><span id="period-label"></span></span><button class="avatar" aria-label="老師帳戶">林</button></div></header>
+      <section class="welcome"><div><div class="eyebrow"><span class="sparkle">✳</span> MONTHLY SCHEDULING</div><h1>把排課的事，交給更聰明的流程。</h1><p id="welcome-sub">五個步驟完成本月課表，重要決定仍由你確認。</p></div><div class="welcome-art" aria-hidden="true"><div class="sun"></div><div class="art-card"><span>本月課表</span><strong>剛剛好 ✦</strong><div class="art-dots"><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="art-spark">✳</div></div></section>
+      <div class="progress-wrap"><div class="progress-meta"><span>本月進度</span><b id="progress-copy">第 1 步，共 5 步</b></div><div class="progress-track"><div id="progress-fill"></div></div></div>
+      <div class="workspace"><section class="content-column"><div class="step-heading"><div><div class="step-kicker" id="step-kicker">STEP 01 · BROADCAST</div><h2 id="step-title"></h2><p id="step-desc"></p></div><span class="step-count" id="step-count"></span></div><div id="step-content"></div><div class="step-footer"><button class="quiet-btn" id="back-btn">← 上一步</button><span class="save-hint"><i></i> 所有變更已自動儲存</span><button class="primary-btn" id="next-btn">下一步 <span>→</span></button></div></section>
+        <aside class="insight-column"><div class="insight-head"><span class="insight-icon">✳</span><div><b>AI 小幫手</b><small id="insight-sub">讓準備工作更輕鬆</small></div><span class="live-dot"></span></div><div id="insight-content"></div><div class="privacy-note"><span>◈</span> 學生資料只用於本次排課</div></aside>
+      </div>
+      <footer class="page-footer"><span>月月排 <b>·</b> 讓每一堂課，都有剛好的時間</span><span>需要協助 <b>↗</b></span></footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
