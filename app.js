@@ -15,6 +15,7 @@ const initial = {
 };
 let state;
 try { state = { ...initial, ...JSON.parse(localStorage.getItem('yueyue-demo') || '{}') }; } catch { state = initial; }
+let lineStatus = { configured: false, receiveConfigured: false, sendConfigured: false, authenticated: true, webhookUrl: null, inboxCount: 0 };
 state.responses = (state.responses || []).map((r, i) => ({
   ...r,
   studentId: r.studentId || `demo-student-${r.id}`,
@@ -38,6 +39,14 @@ function messageTime(value){const date=new Date(value);return Number.isNaN(date.
 function knownPeriods(){return [...new Set([periodKey,...state.responses.map(r=>r.periodKey).filter(Boolean)])].sort();}
 function slotText(slot){ return `${dayLabel(slot.weekday)} ${slot.start}–${slot.end}`; }
 function slotKey(s){return `${s.weekday}-${s.start}`;}
+function lineBroadcastText(){return `同學你好！老師 ${period} 的授課時段已公佈：\n${state.teacherHours||'平日晚間 18:00–21:00，週二除外'}\n請於 ${state.deadline?new Date(state.deadline+'T00:00:00').getDate():25} 日前回覆你方便上課的時間，謝謝！🌸`;}
+function lineCanReceive(){return lineStatus.receiveConfigured&&lineStatus.authenticated;}
+function lineCanSend(){return lineStatus.sendConfigured&&lineStatus.authenticated;}
+function lineLoginPanel(){
+ if(lineStatus.dashboardPasswordMissing)return '<div class="alert-banner">正式環境請先設定管理看板密碼（DASHBOARD_PASSWORD），再開啟 LINE 收件匣。</div>';
+ if(lineStatus.authRequired&&!lineStatus.authenticated)return '<div class="response-actions"><input class="text-input" id="line-dashboard-password" type="password" autocomplete="current-password" placeholder="管理看板密碼"><button class="tiny-btn confirm" id="line-dashboard-login">登入以查看 LINE 訊息</button></div>';
+ return '';
+}
 function toast(message){const t=$('toast');t.textContent=message;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
 function go(next){ state.step=Math.max(0,Math.min(4,next)); persist(); render(); window.scrollTo({top:0,behavior:'smooth'}); }
 function nav(){
@@ -63,7 +72,7 @@ function renderStep(){
   $('next-btn').disabled=state.step===4&&state.notified;
 }
 function step1(){
- return `<div class="card"><div class="card-title"><span>老師可授課時間</span><span class="tag">${period}</span></div><label class="label" for="teacher-hours">用一句話描述可上課時段</label><textarea class="text-area" id="teacher-hours" placeholder="例如：平日晚上 18:00–21:00，週二除外">${esc(state.teacherHours||'11 月平日晚間 18:00–21:00，週二除外')}</textarea><div class="response-actions"><button id="parse-teacher" class="tiny-btn confirm">✳ 整理可上課時段</button><span class="small-note" style="margin:0">發布前先確認 AI 整理的結果</span></div>${state.teacherParsed?`<div class="parse-result"><b>AI 整理：</b>${esc(state.teacherParsed.summary)}<br>${state.teacherParsed.available.map(slotText).join('、')||'尚未擷取出可授課時段'}${state.teacherParsed.needsClarification?`<br><b>需要確認：</b>${esc(state.teacherParsed.clarification)}`:''}</div>`:''}<label class="label">回覆截止日</label><div class="row"><input id="deadline" class="text-input" type="date" value="${esc(state.deadline||day(25))}"><div class="toggle-line" style="padding:0 10px;border:1px solid #e4e8de;border-radius:8px"><span>LINE 尚未連接</span><span class="tag pending">預覽</span></div></div><div class="label" style="margin-top:15px">通知內容預覽</div><div class="invite-box">同學你好！老師 ${esc(period)} 的授課時段已公佈：\n${esc(state.teacherHours||'平日晚間 18:00–21:00，週二除外')}\n請於 ${state.deadline?new Date(state.deadline+'T00:00:00').getDate():25} 日前回覆你方便上課的時間，謝謝！🌸</div>${state.published?'<div class="sent-banner">✓ 已建立本月徵求時間通知。LINE 自動推播尚未接上，這裡先提供可複製的訊息內容。</div>':''}</div>`;
+ return `<div class="card"><div class="card-title"><span>老師可授課時間</span><span class="tag">${period}</span></div><label class="label" for="teacher-hours">用一句話描述可上課時段</label><textarea class="text-area" id="teacher-hours" placeholder="例如：平日晚上 18:00–21:00，週二除外">${esc(state.teacherHours||'11 月平日晚間 18:00–21:00，週二除外')}</textarea><div class="response-actions"><button id="parse-teacher" class="tiny-btn confirm">✳ 整理可上課時段</button><span class="small-note" style="margin:0">發布前先確認 AI 整理的結果</span></div>${state.teacherParsed?`<div class="parse-result"><b>AI 整理：</b>${esc(state.teacherParsed.summary)}<br>${state.teacherParsed.available.map(slotText).join('、')||'尚未擷取出可授課時段'}${state.teacherParsed.needsClarification?`<br><b>需要確認：</b>${esc(state.teacherParsed.clarification)}`:''}</div>`:''}<label class="label">回覆截止日</label><div class="row"><input id="deadline" class="text-input" type="date" value="${esc(state.deadline||day(25))}"><div class="toggle-line" style="padding:0 10px;border:1px solid #e4e8de;border-radius:8px"><span>LINE 通知狀態</span><span class="tag ${(lineStatus.receiveConfigured||lineStatus.sendConfigured)?'':'pending'}">${lineStatus.dashboardPasswordMissing?'需設定管理密碼':lineStatus.receiveConfigured&&lineStatus.sendConfigured?'收訊與推播已設定':lineStatus.receiveConfigured?'已設定收訊':lineStatus.sendConfigured?'已設定推播':'尚未設定'}</span></div></div><div class="label" style="margin-top:15px">LINE 通知預覽</div><div class="invite-box">${esc(lineBroadcastText())}</div>${lineCanSend()?state.broadcastSent?'<div class="sent-banner">✓ LINE 通知已送出。</div>':state.broadcastArmed?'<div class="alert-banner">確認後會將此訊息推播給所有已加入官方帳號的好友。<button class="tiny-btn confirm" id="send-line-broadcast">確認發送 LINE 通知</button> <button class="tiny-btn" id="cancel-line-broadcast">取消</button></div>':'<div class="response-actions"><button id="arm-line-broadcast" class="tiny-btn confirm">發布通知到 LINE</button><span class="small-note" style="margin:0">會推播給官方帳號所有好友</span></div>':`${lineLoginPanel()}<div class="small-note">LINE webhook：${lineStatus.webhookUrl?`<code>${esc(lineStatus.webhookUrl)}</code>`:'部署後會顯示 HTTPS webhook 網址'}。設定 Channel secret 與 access token 後，即可收訊與推播。正式環境請使用 HTTPS，並設定管理密碼。</div>`}${state.published&&!state.broadcastSent?'<div class="sent-banner">通知內容已準備好，可繼續流程。</div>':''}</div>`;
 }
 function step2(){
  const all=state.responses.map(r=>{
@@ -72,7 +81,7 @@ function step2(){
   const actions=r.parsed?`${monthChoice}${r.parsed.multiplePeriods?'<div class="alert-banner">這則訊息提到多個月份，請把每個月份的時段拆成不同訊息再加入。</div>':''}<div class="response-actions">${r.status!=='已確認'&&r.parsed.targetPeriod?`<button class="tiny-btn confirm" data-confirm="${r.id}">${r.parsed.needsClarification?'已向學生確認，納入':'確認此月份時段'}</button>`:r.status==='已確認'?'<span class="tag">已納入此月份</span>':''}<button class="tiny-btn" data-reparse="${r.id}">重新整理</button></div>`:`<div class="response-actions"><button class="tiny-btn confirm" data-parse="${r.id}">✳ AI 整理回覆</button></div>`;
   return `<article class="response-card"><div class="response-top"><div class="student-avatar">${esc(r.avatar)}</div><div class="student-meta"><b>${esc(r.name)}</b><small>訊息 #${esc(r.messageId.slice(-7))} · ${messageTime(r.receivedAt)}</small></div><div><span class="tag">${monthLabel(target)}</span><div class="tag ${r.status==='待解析'?'pending':''}" style="margin-top:4px">${esc(r.status)}</div></div></div><div class="response-quote">「${esc(r.message)}」</div>${r.parsed?`<div class="parse-result"><b>AI 判斷 ${monthLabel(r.parsed.targetPeriod)}：</b>${esc(r.parsed.summary)}<br><b>判斷依據：</b>${({explicit_month:'訊息提到月份',relative_to_message_date:'依訊息日期理解',active_survey:'當時開放的排課月份',unclear:'需要人工確認'})[r.parsed.periodBasis]||'需要確認'}${r.parsed.needsClarification?`<br><b>需要確認：</b>${esc(r.parsed.clarification)}`:''}<br>${r.parsed.available.map(slotText).join('、')||'尚未擷取出明確可上課時段'}${r.parsed.unavailableDates.length?`<br>排除：${r.parsed.unavailableDates.join('、')}`:''}</div>${actions}`:''}</article>`;
  }).join('');
- return `<div class="card"><div class="card-title"><span>學生回覆 <span style="color:#9ba49b;font-weight:500">${state.responses.length} 則</span></span><span class="tag">示範資料</span></div><p class="small-note">每則訊息都有獨立編號、收到時間和排課月份。沒有提月份時，才會歸到當時唯一開放的排課月份；不同月份的回覆不會混在一起。</p><div class="label">新增一則學生回覆，試試 AI 整理</div><div class="row"><input id="new-student" class="text-input" placeholder="學生姓名" value=""><button id="add-response" class="tiny-btn" style="flex:none">＋ 新增回覆</button></div><textarea id="new-message" class="text-area" style="min-height:60px;margin-top:8px" placeholder="貼上 LINE 訊息，例如：2026 年 12 月週一和週三晚上都可以"></textarea><div class="response-list">${all}</div></div>`;
+ return `<div class="card"><div class="card-title"><span>學生回覆 <span style="color:#9ba49b;font-weight:500">${state.responses.length} 則</span></span><span class="tag ${lineCanReceive()?'':'pending'}">${lineCanReceive()?`LINE 收訊已連線 · ${state.responses.filter(r=>r.source==='line').length} 則真實收訊`:lineStatus.receiveConfigured?'LINE 收訊已設定，請登入':lineStatus.dashboardPasswordMissing?'請設定管理密碼':'示範資料'}</span></div><div class="parse-result"><b>LINE Messaging API 連線</b><br>Webhook：<code>${esc(lineStatus.webhookUrl||`${window.location.origin}${lineStatus.webhookPath||'/api/line/webhook'}`)}</code><br>${lineStatus.receiveConfigured?'已設定收訊憑證，可接收文字訊息。':lineStatus.dashboardPasswordMissing?'正式環境尚未設定管理看板密碼。':'尚未設定 Channel secret / access token；本機網址也無法直接接收 LINE webhook。部署 HTTPS 後，將此 webhook URL 設到 LINE Developers Console。'}</div><p class="small-note">LINE webhook 收到的每則文字會保留 LINE message ID、學生 user ID 與收到時間，再交由 AI 整理。沒有提月份時才歸到當時開放的排課月份。</p>${lineLoginPanel()}${lineCanReceive()?'<div class="response-actions"><button id="refresh-line-inbox" class="tiny-btn">↻ 更新 LINE 收件匣</button><span class="small-note" style="margin:0">回覆串流每 10 秒同步</span></div>':''}<div class="label">新增示範回覆，試試 AI 整理</div><div class="row"><input id="new-student" class="text-input" placeholder="學生姓名" value=""><button id="add-response" class="tiny-btn" style="flex:none">＋ 新增示範</button></div><textarea id="new-message" class="text-area" style="min-height:60px;margin-top:8px" placeholder="例如：2026 年 12 月週一和週三晚上都可以"></textarea><div class="response-list">${all}</div></div>`;
 }
 function step3(){
  const rows=state.assignments.length?state.assignments.map(a=>`<div class="match-row"><div class="match-student"><span class="student-avatar">${esc(a.avatar)}</span><b>${esc(a.name)}</b></div><div class="match-time">${a.status==='已安排'?`${esc(a.slot)}${a.dates?.length?`<br><small>${a.dates.length} 次 · ${a.dates.map(date=>date.slice(5).replace('-','/')).join('、')}</small>`:''}`:'尚無可安排時段'}</div><span class="status ${a.needsReview?'collision':a.status==='已安排'?'':'collision'}">${a.needsReview?'新回覆，請檢查':esc(a.status)}${a.needsReview?`<br><button class="tiny-btn" data-review="${esc(a.id)}">保留原排課</button>`:''}</span></div>`).join(''):`<div class="empty">尚未產生排課草稿。先確認學生時段，再開始媒合。</div>`;
@@ -100,6 +109,11 @@ function bind(){
  };
  $('teacher-hours')?.addEventListener('input',e=>{state.teacherHours=e.target.value;state.teacherParsed=null;persist();});$('deadline')?.addEventListener('change',e=>{state.deadline=e.target.value;persist();});
  $('parse-teacher')?.addEventListener('click',parseTeacher);
+ $('arm-line-broadcast')?.addEventListener('click',()=>{state.broadcastArmed=true;persist();render();});
+ $('cancel-line-broadcast')?.addEventListener('click',()=>{state.broadcastArmed=false;persist();render();});
+ $('send-line-broadcast')?.addEventListener('click',sendLineBroadcast);
+ $('refresh-line-inbox')?.addEventListener('click',()=>syncLineInbox(true));
+ $('line-dashboard-login')?.addEventListener('click',loginLineDashboard);
  $('add-response')?.addEventListener('click',()=>{const name=$('new-student').value.trim(),message=$('new-message').value.trim();if(!name||!message){toast('請填寫學生姓名和 LINE 回覆');return;}const id=Date.now();state.responses.unshift({id,studentId:`demo-student-${name.trim().toLowerCase()}`,messageId:`demo-msg-${id}`,receivedAt:new Date().toISOString(),periodKey:'',name,message,avatar:name.slice(-1),status:'待解析'});persist();render();toast('已加入學生回覆');});
  document.querySelectorAll('[data-parse]').forEach(b=>b.onclick=()=>parseOne(Number(b.dataset.parse)));
  document.querySelectorAll('[data-month-choice]').forEach(b=>b.onclick=()=>{const r=state.responses.find(x=>x.id===Number(b.dataset.monthChoice));const choice=$(`month-choice-${b.dataset.monthChoice}`)?.value;if(!r||!choice)return;r.parsed.targetPeriod=choice;r.parsed.periodBasis='teacher_confirmed';r.status='待確認';r.periodKey=choice;persist();render();toast(`已指定為 ${monthLabel(choice)}，請再確認時段內容`);});
@@ -121,6 +135,29 @@ async function parseTeacher(){
  button.disabled=true;button.textContent='整理中…';
  try{const res=await fetch('/api/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:input.value,month:periodKey})});const result=await res.json();if(!res.ok)throw new Error(result.error||'解析失敗');state.teacherHours=input.value;state.teacherParsed=result;persist();render();toast('時段已整理，請檢查日期和時間');}
  catch(error){button.disabled=false;button.textContent='✳ 整理可上課時段';toast(error.message||'AI 解析失敗');}
+}
+async function sendLineBroadcast(){
+ const button=$('send-line-broadcast');if(button){button.disabled=true;button.textContent='發送中…';}
+ try{const res=await fetch('/api/line/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:lineBroadcastText()})});const result=await res.json();if(!res.ok)throw new Error(result.error||'LINE 推播失敗');state.broadcastSent=true;state.broadcastArmed=false;state.published=true;persist();render();toast('LINE 通知已送出');}
+ catch(error){if(button){button.disabled=false;button.textContent='確認發送 LINE 通知';}toast(error.message||'LINE 推播失敗');}
+}
+async function refreshLineStatus(){
+ try{const res=await fetch('/api/line/status',{cache:'no-store'});if(!res.ok)return;lineStatus=await res.json();render();}catch{/* keep preview mode when offline */}
+}
+async function loginLineDashboard(){
+ const password=$('line-dashboard-password')?.value||'';if(!password){toast('請輸入管理看板密碼');return;}
+ try{const res=await fetch('/api/line/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});const data=await res.json();if(!res.ok)throw new Error(data.error||'登入失敗');await refreshLineStatus();await syncLineInbox(true);toast('已登入管理看板');}
+ catch(error){toast(error.message||'登入失敗');}
+}
+async function syncLineInbox(showToast=false){
+ try{
+  const res=await fetch('/api/line/inbox',{cache:'no-store'});if(!res.ok)throw new Error('LINE 收件匣讀取失敗');
+  const data=await res.json(),existing=new Set(state.responses.map(r=>r.messageId).filter(Boolean));let added=0;
+  for(const message of data.messages||[]){if(existing.has(message.messageId))continue;state.responses.unshift({...message,id:Date.now()+added,source:'line'});existing.add(message.messageId);added++;}
+  if(added){persist();render();}
+  lineStatus.inboxCount=(data.messages||[]).length;
+  if(showToast)toast(added?`已匯入 ${added} 則 LINE 回覆`:'收件匣已是最新');
+ }catch(error){if(showToast)toast(error.message||'LINE 收件匣讀取失敗');}
 }
 async function copyText(value){try{await navigator.clipboard.writeText(value);toast('已複製到剪貼簿');}catch{toast('請長按選取文字後複製');}}
 function runMatching(){
@@ -178,3 +215,5 @@ function datesForSlot(slot, studentExclusions=[]){
  return dates;
 }
 render();
+refreshLineStatus().then(()=>syncLineInbox());
+setInterval(()=>{if(lineCanReceive())syncLineInbox();},10_000);

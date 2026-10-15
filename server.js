@@ -1,10 +1,72 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
+const lineInboxFile = process.env.LINE_INBOX_FILE || join(root, '.local-data', 'line-inbox.json');
+let lineInbox = [];
+try { lineInbox = JSON.parse(await readFile(lineInboxFile, 'utf8')); if (!Array.isArray(lineInbox)) lineInbox = []; } catch { /* first run */ }
+let inboxWrite = Promise.resolve();
+
+function lineConfigured() { return Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN); }
+function isProduction() { return process.env.NODE_ENV === 'production'; }
+function dashboardAuthRequired() { return isProduction() && Boolean(process.env.DASHBOARD_PASSWORD); }
+function sessionSignature(expiresAt) { return createHmac('sha256', process.env.DASHBOARD_PASSWORD || 'local-prototype').update(String(expiresAt)).digest('base64url'); }
+function isDashboardAuthorized(req) {
+  if (!dashboardAuthRequired()) return true;
+  const token = (req.headers.cookie || '').split(';').map(v => v.trim()).find(v => v.startsWith('ai_booking_session='))?.slice('ai_booking_session='.length);
+  const [expiresAt, signature] = (token || '').split('.');
+  if (!/^\d+$/.test(expiresAt || '') || Number(expiresAt) <= Date.now() || !signature) return false;
+  const expected = Buffer.from(sessionSignature(expiresAt));
+  const supplied = Buffer.from(signature);
+  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+}
+function dashboardReady(req) { return !isProduction() || (dashboardAuthRequired() && isDashboardAuthorized(req)); }
+function verifyLineSignature(rawBody, signature) {
+  const secret = process.env.LINE_CHANNEL_SECRET;
+  if (!secret || !signature) return false;
+  const expected = createHmac('sha256', secret).update(rawBody).digest();
+  let supplied;
+  try { supplied = Buffer.from(signature, 'base64'); } catch { return false; }
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+}
+function persistInbox() {
+  inboxWrite = inboxWrite.then(async () => {
+    await mkdir(dirname(lineInboxFile), { recursive: true });
+    const temp = `${lineInboxFile}.tmp`;
+    await writeFile(temp, JSON.stringify(lineInbox.slice(-1000)), { mode: 0o600 });
+    await rename(temp, lineInboxFile);
+  });
+  return inboxWrite;
+}
+async function saveLineEvents(events) {
+  const known = new Set(lineInbox.map(item => item.webhookEventId || item.messageId));
+  for (const event of events) {
+    if (event.type !== 'message' || event.message?.type !== 'text' || !event.source) continue;
+    const messageId = String(event.message.id || '');
+    const eventId = String(event.webhookEventId || messageId);
+    if (!messageId || known.has(eventId)) continue;
+    const source = event.source;
+    const lineUserId = source.userId ? String(source.userId) : '';
+    const name = lineUserId ? `LINE 學生 ${lineUserId.slice(-5)}` : 'LINE 群組訊息';
+    lineInbox.push({
+      source: 'line', webhookEventId: eventId, messageId,
+      studentId: lineUserId || `${source.type}:${source.groupId || source.roomId || 'unknown'}`,
+      lineUserId: lineUserId || null, sourceType: source.type,
+      groupId: source.groupId || null, name, avatar: name.slice(-1),
+      message: String(event.message.text).slice(0, 5000),
+      receivedAt: new Date(Number(event.timestamp) || Date.now()).toISOString(),
+      periodKey: '', status: '待解析',
+    });
+    known.add(eventId);
+  }
+  if (lineInbox.length > 1000) lineInbox = lineInbox.slice(-1000);
+  await persistInbox();
+}
 
 async function parseAvailability(message, { activePeriod, receivedAt, knownPeriods }) {
   if (!process.env.OPENAI_API_KEY) throw new Error('尚未設定 AI 服務金鑰。');
@@ -117,7 +179,78 @@ function inferPeriod(message, { activePeriod, receivedAt, knownPeriods = [] }) {
 }
 
 createServer(async (req, res) => {
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  if (req.method === 'POST' && pathname === '/api/line/login') {
+    if (!dashboardAuthRequired()) { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ ok: true })); return; }
+    let raw = '';
+    req.on('data', chunk => { raw += chunk; if (raw.length > 5000) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const { password } = JSON.parse(raw || '{}');
+        const expected = Buffer.from(process.env.DASHBOARD_PASSWORD);
+        const supplied = Buffer.from(String(password || ''));
+        if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) { res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: '密碼不正確' })); return; }
+        const expiresAt = Date.now() + 8 * 60 * 60 * 1000;
+        const secure = isProduction() ? '; Secure' : '';
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': `ai_booking_session=${expiresAt}.${sessionSignature(expiresAt)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${secure}` });
+        res.end(JSON.stringify({ ok: true }));
+      } catch { res.writeHead(400); res.end('Invalid JSON'); }
+    });
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/line/status') {
+    const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+    const passwordMissing = isProduction() && !process.env.DASHBOARD_PASSWORD;
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ configured: lineConfigured() && !passwordMissing, receiveConfigured: Boolean(process.env.LINE_CHANNEL_SECRET) && !passwordMissing, sendConfigured: Boolean(process.env.LINE_CHANNEL_ACCESS_TOKEN) && !passwordMissing, webhookPath: '/api/line/webhook', webhookUrl: base ? `${base}/api/line/webhook` : null, inboxCount: lineInbox.length, baseConfigured: Boolean(base), authRequired: dashboardAuthRequired(), authenticated: isDashboardAuthorized(req), dashboardPasswordMissing: passwordMissing }));
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/line/inbox') {
+    if (!dashboardReady(req)) { res.writeHead(401); res.end('Dashboard login required'); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ messages: lineInbox }));
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/line/broadcast') {
+    if (!dashboardReady(req)) { res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: '請先登入管理看板' })); return; }
+    if (!process.env.LINE_CHANNEL_ACCESS_TOKEN) { res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'LINE_CHANNEL_ACCESS_TOKEN 未設定' })); return; }
+    let raw = '';
+    req.on('data', chunk => { raw += chunk; if (raw.length > 20_000) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { text: message } = JSON.parse(raw || '{}');
+        if (typeof message !== 'string' || !message.trim() || message.length > 5000) throw new Error('通知內容不可空白或超過 5,000 字。');
+        const result = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+          method: 'POST', headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: [{ type: 'text', text: message.trim() }] }), signal: AbortSignal.timeout(15000),
+        });
+        if (!result.ok) throw new Error(`LINE 推播失敗（${result.status}）：${await result.text()}`);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: error.message || 'LINE 推播失敗' }));
+      }
+    });
+    return;
+  }
+  if (req.method === 'POST' && pathname === '/api/line/webhook') {
+    if (!process.env.LINE_CHANNEL_SECRET) { res.writeHead(503); res.end('LINE_CHANNEL_SECRET is not configured'); return; }
+    let raw = '';
+    req.on('data', chunk => { raw += chunk; if (raw.length > 1_000_000) req.destroy(); });
+    req.on('end', () => {
+      if (!verifyLineSignature(raw, req.headers['x-line-signature'])) { res.writeHead(401); res.end('Invalid LINE signature'); return; }
+      let events;
+      try { events = JSON.parse(raw || '{}').events || []; } catch { res.writeHead(400); res.end('Invalid JSON'); return; }
+      saveLineEvents(events).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ ok: true }));
+      }).catch(error => {
+        console.error('LINE webhook processing failed:', error.message);
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'Webhook could not be saved' }));
+      });
+    });
+    return;
+  }
   if (req.method === 'POST' && req.url === '/api/parse') {
+    if (!dashboardReady(req)) { res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: '請先登入管理看板' })); return; }
     let raw = '';
     req.on('data', chunk => { raw += chunk; if (raw.length > 20_000) req.destroy(); });
     req.on('end', async () => {
@@ -133,7 +266,6 @@ createServer(async (req, res) => {
     });
     return;
   }
-  const pathname = new URL(req.url, 'http://localhost').pathname;
   const file = pathname === '/' ? 'index.html' : normalize(pathname).replace(/^([/\\])+/, '');
   try {
     const content = await readFile(join(root, file));
@@ -141,4 +273,4 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404); res.end('Not found');
   }
-}).listen(process.env.PORT || 3000, '127.0.0.1', () => console.log(`排課工作台已啟動：http://localhost:${process.env.PORT || 3000}`));
+}).listen(process.env.PORT || 3000, isProduction() ? '0.0.0.0' : '127.0.0.1', () => console.log(`排課工作台已啟動：http://localhost:${process.env.PORT || 3000}`));

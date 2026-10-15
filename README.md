@@ -12,19 +12,27 @@
 - 查看未安排學生，整理可複製的代課邀請。
 - 檢查學生通知預覽並完成本月確認。
 - 操作狀態暫存在目前瀏覽器的 localStorage。
+- LINE Messaging API webhook 可驗證簽章並收文字訊息，保留 LINE message ID、user ID 與時間；收件匣每 10 秒同步，老師按下 AI 整理後再確認是否納入排課。
+- 已設定 LINE 憑證時，可在畫面先看清楚通知，再二次確認推播給官方帳號所有好友。
 
 ## 本機預覽
 
 需要 Node.js 18 或更新版本。安裝環境後，啟動伺服器：
 
 ```sh
-OPENAI_API_KEY="你的 API 金鑰" npm run dev
+OPENAI_API_KEY="你的 API 金鑰" LINE_CHANNEL_SECRET="LINE channel secret" LINE_CHANNEL_ACCESS_TOKEN="LINE channel access token" PUBLIC_BASE_URL="https://你的公開網址" DASHBOARD_PASSWORD="管理看板密碼" npm run dev
 ```
 
 開啟 <http://localhost:3000>。伺服器會將學生文字送到 OpenAI Responses API，以 Structured Outputs 取得符合格式的時段資料；API 金鑰只在伺服器端使用。可用 `OPENAI_MODEL` 指定模型，預設為 `gpt-4o-mini`。
 
-## 目前尚未連接
+## LINE 設定與銜接
 
-此版本是本機原型，尚未連接 LINE Messaging API、LINE 使用者身分、資料庫、正式推播或代課老師回覆。畫面上的訊息編號、學生識別碼與時間是示範資料；接上 LINE webhook 後，才會以 LINE 提供的訊息 ID、使用者 ID 與收到時間取代。頁面中的發布、邀請和通知操作是預覽與本機狀態，不會真的傳訊息給學生。上線前需補上登入與權限、資料庫、LINE webhook、訊息發送、學生身分核對與正式環境金鑰。
+LINE 設定完成並部署到可公開連線的 HTTPS 網址後，將 `PUBLIC_BASE_URL` 設為該網址，並把畫面顯示的 `/api/line/webhook` 設為 LINE Developers Console 的 webhook URL。請開啟 webhook 使用設定並按 Verify。收到文字後，後端先驗簽，再保留訊息 ID、來源 user ID、時間及內容；AI 不會自行回覆或排課，老師要在看板確認。LINE 訊息收件匣目前存在 `.local-data/line-inbox.json`，不納入 Git。正式環境須設定 `DASHBOARD_PASSWORD`；登入後才能查看收件匣、執行 AI 解析與推播。
+
+**舊版銜接方式：**舊版已有 LIFF、LINE Login、Messaging API、Supabase 學生／課程／排課資料與 webhook。LINE 官方規定每個 Messaging API 頻道只能設定一個 bot server webhook endpoint，所以不要把正式頻道 webhook 改指向這個獨立原型；要真實測試，請使用另一個測試頻道。正式銜接時應把 AI 解析作為服務接入舊版 webhook 與排課資料流程，沿用舊版學生身分和資料庫，保留舊版其他功能。此原型尚未讀寫舊版 Supabase，也不會修改舊版專案。
+
+目前尚未連接舊版資料庫或代課老師回覆。LINE 收件匣在此原型使用本機 JSON 檔保存，適合驗證流程，尚非正式多使用者儲存方式。若 LINE 憑證未設定，LINE 推播按鈕不會啟用，通知僅供預覽。正式接入舊版時，AI 解析應沿用舊版 Supabase 的學生、每月週期、時段和課表資料，不另建一套並行名單。
+
+參考：[LINE 接收訊息與 webhook](https://developers.line.biz/en/docs/messaging-api/receiving-messages/)、[Webhook 簽章驗證](https://developers.line.biz/en/docs/messaging-api/verify-webhook-signature/)、[Webhook endpoint 設定](https://developers.line.biz/en/docs/messaging-api/building-bot/)、[發送訊息](https://developers.line.biz/en/docs/messaging-api/sending-messages/)。
 
 AI 解析結果需要老師檢查；有歧義的回覆會顯示待確認。排課媒合由程式依規則計算，不讓 AI 自行決定正式課表。
