@@ -15,6 +15,13 @@ const initial = {
 };
 let state;
 try { state = { ...initial, ...JSON.parse(localStorage.getItem('yueyue-demo') || '{}') }; } catch { state = initial; }
+state.responses = (state.responses || []).map((r, i) => ({
+  ...r,
+  studentId: r.studentId || `demo-student-${r.id}`,
+  messageId: r.messageId || `demo-msg-${r.id}-${i+1}`,
+  receivedAt: r.receivedAt || new Date(Date.now() - (state.responses.length-i)*3600_000).toISOString(),
+  periodKey: r.periodKey || periodKey,
+}));
 const steps = [
   { title: '發布老師可授課時間', desc: '先告訴學生下個月哪些時段可以安排，再開始收集回覆。', kicker: 'STEP 01 · BROADCAST' },
   { title: '整理學生的時間回覆', desc: 'LINE 回覆集中在這裡。AI 先幫你讀懂內容，你確認後才納入排課。', kicker: 'STEP 02 · UNDERSTAND' },
@@ -26,6 +33,9 @@ const $ = (id) => document.getElementById(id);
 function persist(){ localStorage.setItem('yueyue-demo',JSON.stringify(state)); }
 function esc(s=''){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function dayLabel(index){ return weekdays[index] || '未知'; }
+function monthLabel(key){if(!/^\d{4}-\d{2}$/.test(key||''))return '月份待確認';const [year,month]=key.split('-');return `${year}/${Number(month)}`;}
+function messageTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'收到時間未知':date.toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});}
+function knownPeriods(){return [...new Set([periodKey,...state.responses.map(r=>r.periodKey).filter(Boolean)])].sort();}
 function slotText(slot){ return `${dayLabel(slot.weekday)} ${slot.start}–${slot.end}`; }
 function slotKey(s){return `${s.weekday}-${s.start}`;}
 function toast(message){const t=$('toast');t.textContent=message;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
@@ -56,11 +66,16 @@ function step1(){
  return `<div class="card"><div class="card-title"><span>老師可授課時間</span><span class="tag">${period}</span></div><label class="label" for="teacher-hours">用一句話描述可上課時段</label><textarea class="text-area" id="teacher-hours" placeholder="例如：平日晚上 18:00–21:00，週二除外">${esc(state.teacherHours||'11 月平日晚間 18:00–21:00，週二除外')}</textarea><div class="response-actions"><button id="parse-teacher" class="tiny-btn confirm">✳ 整理可上課時段</button><span class="small-note" style="margin:0">發布前先確認 AI 整理的結果</span></div>${state.teacherParsed?`<div class="parse-result"><b>AI 整理：</b>${esc(state.teacherParsed.summary)}<br>${state.teacherParsed.available.map(slotText).join('、')||'尚未擷取出可授課時段'}${state.teacherParsed.needsClarification?`<br><b>需要確認：</b>${esc(state.teacherParsed.clarification)}`:''}</div>`:''}<label class="label">回覆截止日</label><div class="row"><input id="deadline" class="text-input" type="date" value="${esc(state.deadline||day(25))}"><div class="toggle-line" style="padding:0 10px;border:1px solid #e4e8de;border-radius:8px"><span>LINE 尚未連接</span><span class="tag pending">預覽</span></div></div><div class="label" style="margin-top:15px">通知內容預覽</div><div class="invite-box">同學你好！老師 ${esc(period)} 的授課時段已公佈：\n${esc(state.teacherHours||'平日晚間 18:00–21:00，週二除外')}\n請於 ${state.deadline?new Date(state.deadline+'T00:00:00').getDate():25} 日前回覆你方便上課的時間，謝謝！🌸</div>${state.published?'<div class="sent-banner">✓ 已建立本月徵求時間通知。LINE 自動推播尚未接上，這裡先提供可複製的訊息內容。</div>':''}</div>`;
 }
 function step2(){
- const all=state.responses.map(r=>`<article class="response-card"><div class="response-top"><div class="student-avatar">${esc(r.avatar)}</div><div class="student-meta"><b>${esc(r.name)}</b><small>LINE 回覆 · ${r.received||'今天 10:24'}</small></div><span class="tag ${r.status==='待解析'?'pending':''}">${esc(r.status)}</span></div><div class="response-quote">「${esc(r.message)}」</div>${r.parsed?`<div class="parse-result"><b>AI 整理：</b>${esc(r.parsed.summary)}${r.parsed.needsClarification?`<br><b>需要確認：</b>${esc(r.parsed.clarification)}`:''}<br>${r.parsed.available.map(slotText).join('、')||'尚未擷取出明確可上課時段'}${r.parsed.unavailableDates.length?`<br>排除：${r.parsed.unavailableDates.join('、')}`:''}</div><div class="response-actions">${r.status!=='已確認'?`<button class="tiny-btn confirm" data-confirm="${r.id}">${r.parsed.needsClarification?'已向學生確認，納入':'確認時段'}</button>`:'<span class="tag">已納入排課</span>'}<button class="tiny-btn" data-reparse="${r.id}">重新整理</button></div>`:`<div class="response-actions"><button class="tiny-btn confirm" data-parse="${r.id}">✳ AI 整理回覆</button></div>`}</article>`).join('');
- return `<div class="card"><div class="card-title"><span>學生回覆 <span style="color:#9ba49b;font-weight:500">${state.responses.length} 則</span></span><span class="tag">示範資料</span></div><div class="label">新增一則學生回覆，試試 AI 整理</div><div class="row"><input id="new-student" class="text-input" placeholder="學生姓名" value=""><button id="add-response" class="tiny-btn" style="flex:none">＋ 新增回覆</button></div><textarea id="new-message" class="text-area" style="min-height:60px;margin-top:8px" placeholder="貼上 LINE 訊息，例如：週一和週三晚上都可以，月底那週不行"></textarea><div class="response-list">${all}</div></div>`;
+ const all=state.responses.map(r=>{
+  const target=r.parsed?.targetPeriod||r.periodKey;
+  const monthChoice=(r.parsed&&!r.parsed.targetPeriod&&!r.parsed.multiplePeriods)?`<div class="response-actions"><select class="select-input" id="month-choice-${r.id}" aria-label="選擇這則訊息的排課月份">${knownPeriods().map(m=>`<option value="${m}">${monthLabel(m)}</option>`).join('')}${Array.from({length:48},(_,i)=>{const d=new Date(monthDate.getFullYear()-1, i, 1),m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;return knownPeriods().includes(m)?'':`<option value="${m}">${monthLabel(m)}</option>`}).join('')}</select><button class="tiny-btn" data-month-choice="${r.id}">指定月份</button></div>`:'';
+  const actions=r.parsed?`${monthChoice}${r.parsed.multiplePeriods?'<div class="alert-banner">這則訊息提到多個月份，請把每個月份的時段拆成不同訊息再加入。</div>':''}<div class="response-actions">${r.status!=='已確認'&&r.parsed.targetPeriod?`<button class="tiny-btn confirm" data-confirm="${r.id}">${r.parsed.needsClarification?'已向學生確認，納入':'確認此月份時段'}</button>`:r.status==='已確認'?'<span class="tag">已納入此月份</span>':''}<button class="tiny-btn" data-reparse="${r.id}">重新整理</button></div>`:`<div class="response-actions"><button class="tiny-btn confirm" data-parse="${r.id}">✳ AI 整理回覆</button></div>`;
+  return `<article class="response-card"><div class="response-top"><div class="student-avatar">${esc(r.avatar)}</div><div class="student-meta"><b>${esc(r.name)}</b><small>訊息 #${esc(r.messageId.slice(-7))} · ${messageTime(r.receivedAt)}</small></div><div><span class="tag">${monthLabel(target)}</span><div class="tag ${r.status==='待解析'?'pending':''}" style="margin-top:4px">${esc(r.status)}</div></div></div><div class="response-quote">「${esc(r.message)}」</div>${r.parsed?`<div class="parse-result"><b>AI 判斷 ${monthLabel(r.parsed.targetPeriod)}：</b>${esc(r.parsed.summary)}<br><b>判斷依據：</b>${({explicit_month:'訊息提到月份',relative_to_message_date:'依訊息日期理解',active_survey:'當時開放的排課月份',unclear:'需要人工確認'})[r.parsed.periodBasis]||'需要確認'}${r.parsed.needsClarification?`<br><b>需要確認：</b>${esc(r.parsed.clarification)}`:''}<br>${r.parsed.available.map(slotText).join('、')||'尚未擷取出明確可上課時段'}${r.parsed.unavailableDates.length?`<br>排除：${r.parsed.unavailableDates.join('、')}`:''}</div>${actions}`:''}</article>`;
+ }).join('');
+ return `<div class="card"><div class="card-title"><span>學生回覆 <span style="color:#9ba49b;font-weight:500">${state.responses.length} 則</span></span><span class="tag">示範資料</span></div><p class="small-note">每則訊息都有獨立編號、收到時間和排課月份。沒有提月份時，才會歸到當時唯一開放的排課月份；不同月份的回覆不會混在一起。</p><div class="label">新增一則學生回覆，試試 AI 整理</div><div class="row"><input id="new-student" class="text-input" placeholder="學生姓名" value=""><button id="add-response" class="tiny-btn" style="flex:none">＋ 新增回覆</button></div><textarea id="new-message" class="text-area" style="min-height:60px;margin-top:8px" placeholder="貼上 LINE 訊息，例如：2026 年 12 月週一和週三晚上都可以"></textarea><div class="response-list">${all}</div></div>`;
 }
 function step3(){
- const rows=state.assignments.length?state.assignments.map(a=>`<div class="match-row"><div class="match-student"><span class="student-avatar">${esc(a.avatar)}</span><b>${esc(a.name)}</b></div><div class="match-time">${a.status==='已安排'?`${esc(a.slot)}${a.dates?.length?`<br><small>${a.dates.length} 次 · ${a.dates.map(date=>date.slice(5).replace('-','/')).join('、')}</small>`:''}`:'尚無可安排時段'}</div><span class="status ${a.status==='已安排'?'':'collision'}">${esc(a.status)}</span></div>`).join(''):`<div class="empty">尚未產生排課草稿。先確認學生時段，再開始媒合。</div>`;
+ const rows=state.assignments.length?state.assignments.map(a=>`<div class="match-row"><div class="match-student"><span class="student-avatar">${esc(a.avatar)}</span><b>${esc(a.name)}</b></div><div class="match-time">${a.status==='已安排'?`${esc(a.slot)}${a.dates?.length?`<br><small>${a.dates.length} 次 · ${a.dates.map(date=>date.slice(5).replace('-','/')).join('、')}</small>`:''}`:'尚無可安排時段'}</div><span class="status ${a.needsReview?'collision':a.status==='已安排'?'':'collision'}">${a.needsReview?'新回覆，請檢查':esc(a.status)}${a.needsReview?`<br><button class="tiny-btn" data-review="${esc(a.id)}">保留原排課</button>`:''}</span></div>`).join(''):`<div class="empty">尚未產生排課草稿。先確認學生時段，再開始媒合。</div>`;
  return `<div class="card"><div class="card-title"><span>本月排課草稿</span><button id="run-match" class="tiny-btn confirm">✳ 自動媒合</button></div><p class="small-note">只使用已由學生確認、且符合老師時段的時間。選項少的學生優先；已安排的課不會在再次媒合時改排。</p><div class="match-list">${rows}</div>${state.assignments.length?'<div class="alert-banner">請檢查黃色的待安排項目。修改草稿不會通知學生，直到最後一步確認。</div>':''}</div>`;
 }
 function step4(){
@@ -70,7 +85,7 @@ function step4(){
 }
 function step5(){
  const assigned=state.assignments.filter(a=>a.status==='已安排'), pending=state.assignments.filter(a=>a.status!=='已安排');
- return `<div class="card"><div class="card-title"><span>送出前最後確認</span><span class="tag">${period}</span></div><div class="student-checklist"><div class="check-row"><span class="check on">✓</span><span>本月可授課時段</span><small>已設定</small></div><div class="check-row"><span class="check ${state.responses.every(r=>r.status==='已確認')?'on':''}">${state.responses.every(r=>r.status==='已確認')}</span><span>學生時間回覆</span><small>${state.responses.filter(r=>r.status==='已確認').length} / ${state.responses.length} 已確認</small></div><div class="check-row"><span class="check ${state.assignments.length?'on':''}">${state.assignments.length?'✓':'!'}</span><span>排課草稿</span><small>${assigned.length} 位已安排 · ${pending.length} 位待處理</small></div></div><div class="final-card"><div class="final-icon">✓</div><div><b>暫定排入 ${assigned.length} 位學生</b><small>每位學生會收到個別課表預覽。沒有排入的學生會收到後續聯絡說明。</small></div></div>${pending.length?`<div class="final-card"><div class="final-icon" style="background:#fff2df;color:#ab7c43">!</div><div><b>${pending.length} 位學生仍待安排</b><small>${pending.map(a=>esc(a.name)).join('、')}；可以先核准課表並保留待處理狀態。</small></div></div>`:''}${state.notified?'<div class="sent-banner">✓ 已完成本月確認。實際 LINE 個別推播尚未串接，以下為各學生通知預覽。</div>':''}<div class="label">通知預覽</div>${assigned.map(a=>`<div class="final-card"><div class="final-icon">✉</div><div><b>${esc(a.name)}</b><small>${esc(period)} 暫定上課時間：${esc(a.slot)}${a.dates?.length?`（${a.dates.map(date=>date.slice(5).replace('-','/')).join('、')}）`:''}</small></div></div>`).join('')||'<div class="empty">請先完成排課草稿。</div>'}</div>`;
+ return `<div class="card"><div class="card-title"><span>送出前最後確認</span><span class="tag">${period}</span></div><div class="student-checklist"><div class="check-row"><span class="check on">✓</span><span>本月可授課時段</span><small>已設定</small></div><div class="check-row"><span class="check ${state.responses.every(r=>r.status==='已確認')?'on':''}">${state.responses.every(r=>r.status==='已確認')?'✓':'!'}</span><span>學生時間回覆</span><small>${state.responses.filter(r=>r.status==='已確認').length} / ${state.responses.length} 已確認</small></div><div class="check-row"><span class="check ${state.assignments.length?'on':''}">${state.assignments.length?'✓':'!'}</span><span>排課草稿</span><small>${assigned.length} 位已安排 · ${pending.length} 位待處理</small></div></div><div class="final-card"><div class="final-icon">✓</div><div><b>暫定排入 ${assigned.length} 位學生</b><small>每位學生會收到個別課表預覽。沒有排入的學生會收到後續聯絡說明。</small></div></div>${pending.length?`<div class="final-card"><div class="final-icon" style="background:#fff2df;color:#ab7c43">!</div><div><b>${pending.length} 位學生仍待安排</b><small>${pending.map(a=>esc(a.name)).join('、')}；可以先核准課表並保留待處理狀態。</small></div></div>`:''}${state.notified?'<div class="sent-banner">✓ 已完成本月確認。實際 LINE 個別推播尚未串接，以下為各學生通知預覽。</div>':''}<div class="label">通知預覽</div>${assigned.map(a=>`<div class="final-card"><div class="final-icon">✉</div><div><b>${esc(a.name)}</b><small>${esc(period)} 暫定上課時間：${esc(a.slot)}${a.dates?.length?`（${a.dates.map(date=>date.slice(5).replace('-','/')).join('、')}）`:''}</small></div></div>`).join('')||'<div class="empty">請先完成排課草稿。</div>'}</div>`;
 }
 function render(){
  $('period-label').textContent=period; $('progress-copy').textContent=`第 ${state.step+1} 步，共 5 步`; $('progress-fill').style.width=`${(state.step+1)*20}%`; $('welcome-sub').textContent=state.notified?'本月課表流程已完成。下個月再開始新一輪。':'五個步驟完成本月課表，重要決定仍由你確認。'; nav();renderStep();insight();bind();
@@ -80,23 +95,25 @@ function bind(){
    if(state.step===0){if(!state.teacherParsed){toast('先整理一次老師可授課時段');return;}state.teacherHours=$('teacher-hours').value.trim();state.deadline=$('deadline').value;state.published=true;persist();toast('通知內容已準備好');go(1);return;}
    if(state.step===1){go(2);return;}
    if(state.step===2){if(!state.assignments.length){toast('請先產生排課草稿');return;}go(3);return;}
-   if(state.step===3){go(4);return;}
+   if(state.step===3){if(state.assignments.some(a=>a.needsReview)){toast('先檢查有新回覆的課程，再送出通知');go(2);return;}go(4);return;}
    state.notified=true;persist();render();toast('本月課表已確認');
  };
  $('teacher-hours')?.addEventListener('input',e=>{state.teacherHours=e.target.value;state.teacherParsed=null;persist();});$('deadline')?.addEventListener('change',e=>{state.deadline=e.target.value;persist();});
  $('parse-teacher')?.addEventListener('click',parseTeacher);
- $('add-response')?.addEventListener('click',()=>{const name=$('new-student').value.trim(),message=$('new-message').value.trim();if(!name||!message){toast('請填寫學生姓名和 LINE 回覆');return;}state.responses.unshift({id:Date.now(),name,message,avatar:name.slice(-1),status:'待解析'});persist();render();toast('已加入學生回覆');});
+ $('add-response')?.addEventListener('click',()=>{const name=$('new-student').value.trim(),message=$('new-message').value.trim();if(!name||!message){toast('請填寫學生姓名和 LINE 回覆');return;}const id=Date.now();state.responses.unshift({id,studentId:`demo-student-${name.trim().toLowerCase()}`,messageId:`demo-msg-${id}`,receivedAt:new Date().toISOString(),periodKey:'',name,message,avatar:name.slice(-1),status:'待解析'});persist();render();toast('已加入學生回覆');});
  document.querySelectorAll('[data-parse]').forEach(b=>b.onclick=()=>parseOne(Number(b.dataset.parse)));
- document.querySelectorAll('[data-confirm]').forEach(b=>b.onclick=()=>{const r=state.responses.find(x=>x.id===Number(b.dataset.confirm));if(r){r.status='已確認';r.availability=r.parsed?.available||[];r.excluded=r.parsed?.unavailableDates||[];persist();render();toast(`${r.name} 的時段已納入排課`);}});
+ document.querySelectorAll('[data-month-choice]').forEach(b=>b.onclick=()=>{const r=state.responses.find(x=>x.id===Number(b.dataset.monthChoice));const choice=$(`month-choice-${b.dataset.monthChoice}`)?.value;if(!r||!choice)return;r.parsed.targetPeriod=choice;r.parsed.periodBasis='teacher_confirmed';r.status='待確認';r.periodKey=choice;persist();render();toast(`已指定為 ${monthLabel(choice)}，請再確認時段內容`);});
+ document.querySelectorAll('[data-confirm]').forEach(b=>b.onclick=()=>{const r=state.responses.find(x=>x.id===Number(b.dataset.confirm));if(r)confirmResponse(r);});
  document.querySelectorAll('[data-reparse]').forEach(b=>b.onclick=()=>parseOne(Number(b.dataset.reparse)));
  $('run-match')?.addEventListener('click',runMatching);
+ document.querySelectorAll('[data-review]').forEach(b=>b.onclick=()=>{const assignment=state.assignments.find(a=>String(a.id)===b.dataset.review);if(assignment){assignment.needsReview=false;persist();render();toast('已確認保留原排課');}});
  $('copy-invite')?.addEventListener('click',()=>copyText($('sub-invite').textContent));
  $('send-invite')?.addEventListener('click',()=>{state.substituteSent=true;persist();render();toast('代課邀請文字已準備好');});
 }
 async function parseOne(id){
  const r=state.responses.find(x=>x.id===id);if(!r)return;
  const b=document.querySelector(`[data-reparse="${id}"]`);if(b){b.disabled=true;b.textContent='整理中…';}
- try{const res=await fetch('/api/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:r.message,month:periodKey})});const result=await res.json();if(!res.ok)throw new Error(result.error||'解析失敗');r.parsed=result;r.status=result.needsClarification?'需要確認':'已整理';persist();render();toast(result.needsClarification?'AI 有一個問題需要確認':'時段整理完成，請確認結果');}
+ try{const res=await fetch('/api/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:r.message,month:periodKey,receivedAt:r.receivedAt,knownPeriods:knownPeriods(),messageId:r.messageId,studentId:r.studentId})});const result=await res.json();if(!res.ok)throw new Error(result.error||'解析失敗');r.parsed=result;r.periodKey=result.targetPeriod||'';r.status=!result.targetPeriod?'月份待確認':result.needsClarification?'需要確認':'已整理';persist();render();toast(!result.targetPeriod?'AI 無法確認月份，請補充年份月份':result.needsClarification?'AI 有一個問題需要確認':`已判斷屬於 ${monthLabel(result.targetPeriod)}`);}
  catch(error){if(b){b.disabled=false;b.textContent='重新整理';}toast(error.message||'AI 解析失敗');}
 }
 async function parseTeacher(){
@@ -108,7 +125,9 @@ async function parseTeacher(){
 async function copyText(value){try{await navigator.clipboard.writeText(value);toast('已複製到剪貼簿');}catch{toast('請長按選取文字後複製');}}
 function runMatching(){
  const teachers=(state.teacherParsed?.available||[]).flatMap(a=>expandSlot(a));
- const students=state.responses.filter(r=>r.status==='已確認').map(r=>({id:r.id,name:r.name,avatar:r.avatar,excluded:r.excluded||[],slots:(r.availability||[]).flatMap(a=>expandSlot(a))}));
+ const latestByStudent=new Map();
+ for(const r of state.responses.filter(r=>r.status==='已確認'&&r.periodKey===periodKey).sort((a,b)=>new Date(a.receivedAt)-new Date(b.receivedAt)))latestByStudent.set(r.studentId||r.id,r);
+ const students=[...latestByStudent.values()].map(r=>({id:r.studentId||r.id,name:r.name,avatar:r.avatar,excluded:r.excluded||[],slots:(r.availability||[]).flatMap(a=>expandSlot(a))}));
  if(!students.length){toast('先整理並確認至少一位學生的回覆');return;}
  const previous=new Map(state.assignments.map(a=>[a.id,a]));
  const used=new Set(state.assignments.filter(a=>a.status==='已安排').map(a=>a.slotKey));
@@ -117,10 +136,31 @@ function runMatching(){
   const existing=previous.get(student.id);
   if(existing?.status==='已安排'){assigned.push(existing);continue;}
   const candidate=student.slots.find(slot=>teachers.some(t=>slotKey(t)===slotKey(slot))&&!used.has(slotKey(slot))&&datesForSlot(slot,student.excluded).length>0);
-  if(candidate){const key=slotKey(candidate);used.add(key);assigned.push({...student,slot:slotText(candidate),slotKey:key,dates:datesForSlot(candidate,student.excluded),status:'已安排'});}
+  if(candidate){const key=slotKey(candidate);used.add(key);assigned.push({...student,periodKey,slot:slotText(candidate),slotKey:key,dates:datesForSlot(candidate,student.excluded),status:'已安排'});}
   else assigned.push({...student,slot:'',status:'待安排'});
  }
  state.assignments=assigned;persist();render();toast('排課草稿已更新');
+}
+function confirmResponse(response){
+ const month=response.parsed?.targetPeriod;if(!month)return;
+ const earlier=state.responses.filter(r=>r!==response&&r.studentId===response.studentId&&r.periodKey===month&&r.status==='已確認').sort((a,b)=>new Date(b.receivedAt)-new Date(a.receivedAt))[0];
+ const intent=response.parsed.intent;
+ if(earlier&&intent==='new_availability'){
+  response.availability=[...new Map([...(earlier.availability||[]),...(response.parsed.available||[])].map(slot=>[`${slot.weekday}-${slot.start}-${slot.end}-${slot.date||''}`,slot])).values()];
+  response.excluded=[...new Set([...(earlier.excluded||[]),...(response.parsed.unavailableDates||[])])];
+ }else if(earlier&&intent==='date_exception'){
+  response.availability=earlier.availability||[];
+  response.excluded=[...new Set([...(earlier.excluded||[]),...(response.parsed.unavailableDates||[])])];
+ }else{
+  response.availability=response.parsed.available||[];
+  response.excluded=response.parsed.unavailableDates||[];
+ }
+ response.periodKey=month;
+ for(const old of state.responses.filter(r=>r!==response&&r.studentId===response.studentId&&r.periodKey===month&&r.status==='已確認'))old.status='已被新回覆更新';
+ const oldAssignment=state.assignments.find(a=>a.id===response.studentId&&(!a.periodKey||a.periodKey===month)&&a.status==='已安排');
+ if(oldAssignment)oldAssignment.needsReview=true;
+ response.status='已確認';
+ persist();render();toast(`${response.name} 的 ${monthLabel(month)} 時段已納入`);
 }
 function expandSlot(slot){
  const [sh,sm]=String(slot.start||'').split(':').map(Number),[eh,em]=String(slot.end||'').split(':').map(Number);if(!Number.isFinite(sh)||!Number.isFinite(eh))return[];
